@@ -184,7 +184,9 @@ FastAPI + 原生前端 · ffmpeg
 
 ## License
 
-MIT —— 见 [LICENSE](LICENSE)。
+[MIT](LICENSE) © 2026 stellifex
 
-第三方组件与音色授权提示一并写在 LICENSE 里。
+第三方组件（Qwen3-TTS / CAM++ / ffmpeg）的授权与使用须知见
+[THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。
+
 **请勿将本工具用于未经授权的声音克隆、冒充他人或其他违法用途。**
