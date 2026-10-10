@@ -1,0 +1,179 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="auto">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>有声书生成工具</title>
+<link rel="stylesheet" href="/static/app.css">
+</head>
+<body>
+
+<!-- ═══════════ 顶栏 ═══════════ -->
+<header class="topbar">
+  <div class="brand">
+    <svg class="brand-mark" viewBox="0 0 24 24" aria-hidden="true">
+      <path d="M4 6.5A2.5 2.5 0 0 1 6.5 4h11A2.5 2.5 0 0 1 20 6.5v11a2.5 2.5 0 0 1-2.5 2.5h-11A2.5 2.5 0 0 1 4 17.5z"/>
+      <path d="M12 8.5v7M9 10v4M15 10v4" class="wave"/>
+    </svg>
+    <span class="brand-name">有声书生成工具</span>
+  </div>
+
+  <div class="topbar-meta" id="cfgChips"></div>
+
+  <div class="topbar-actions">
+    <button class="icon-btn" id="btnTheme" title="切换主题" aria-label="切换主题">
+      <svg viewBox="0 0 24 24" class="i-sun"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg>
+      <svg viewBox="0 0 24 24" class="i-moon"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/></svg>
+    </button>
+  </div>
+</header>
+
+<!-- ═══════════ 主体 ═══════════ -->
+<div class="shell">
+
+  <!-- ── 左侧栏 ── -->
+  <aside class="sidebar">
+    <nav class="nav">
+      <button class="nav-item is-active" data-view="generate">
+        <svg viewBox="0 0 24 24"><path d="M4 6h16M4 12h16M4 18h10"/></svg>
+        <span>生成书</span>
+      </button>
+      <button class="nav-item" data-view="library">
+        <svg viewBox="0 0 24 24"><path d="M4 5h4v14H4zM10 5h4v14h-4zM16 7l4-1 2 12-4 1z"/></svg>
+        <span>书库</span>
+        <span class="nav-badge" id="bookCount">0</span>
+      </button>
+    </nav>
+
+    <div class="sidebar-scroll">
+      <div class="side-label">书库</div>
+      <div id="sideBooks" class="side-books"><div class="empty-sm">暂无项目</div></div>
+    </div>
+
+    <div class="sidebar-foot">
+      <div class="path-hint" id="pathHint"></div>
+      <button class="btn btn-ghost btn-block" id="btnOpenOut">
+        <svg viewBox="0 0 24 24"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>
+        打开输出目录
+      </button>
+    </div>
+  </aside>
+
+  <!-- ── 主区 ── -->
+  <main class="main">
+
+    <!-- 生成书 -->
+    <section class="view is-active" id="view-generate">
+      <div class="view-head">
+        <h1>生成书</h1>
+        <p>把 <code>input/</code> 里的电子书转成有声书。合集会列出分册供勾选。</p>
+      </div>
+
+      <div class="grid">
+        <!-- 步骤 1 -->
+        <div class="card">
+          <div class="card-head"><span class="step">1</span><h2>选择电子书</h2></div>
+          <div class="card-body">
+            <div class="field">
+              <label for="fileSel">输入目录中的文件</label>
+              <select id="fileSel"><option value="">— 请选择 —</option></select>
+            </div>
+            <div class="row">
+              <button class="btn btn-primary" id="btnParse">解析预览</button>
+              <label class="btn btn-ghost file-btn">
+                上传电子书
+                <input type="file" id="fileUp" accept=".epub,.mobi,.azw3,.azw,.txt" hidden>
+              </label>
+            </div>
+          </div>
+        </div>
+
+        <!-- 步骤 2 -->
+        <div class="card">
+          <div class="card-head"><span class="step">2</span><h2>选择分册</h2></div>
+          <div class="card-body">
+            <div id="volBox" class="vol-box"><div class="empty-sm">先解析预览</div></div>
+          </div>
+        </div>
+
+        <!-- 步骤 3 -->
+        <div class="card span-2">
+          <div class="card-head"><span class="step">3</span><h2>音色设置</h2></div>
+          <div class="card-body two-col">
+            <div>
+              <div class="field">
+                <label for="refText">参考音色对应文本（须与音频内容一致）</label>
+                <textarea id="refText" rows="3" spellcheck="false"></textarea>
+              </div>
+              <div class="field">
+                <label>参考音频</label>
+                <div class="row">
+                  <audio id="refPlayer" controls preload="none" src="/api/ref-audio"></audio>
+                  <label class="btn btn-ghost file-btn">
+                    换一个
+                    <input type="file" id="refUp" accept="audio/*" hidden>
+                  </label>
+                </div>
+                <div class="hint" id="refHint"></div>
+              </div>
+            </div>
+            <div class="preview-pane">
+              <div class="field">
+                <label for="bookName">书名（可选，留空用文件名）</label>
+                <input type="text" id="bookName" placeholder="留空则使用文件中的书名">
+              </div>
+              <div id="previewOut" class="preview-out"><div class="empty-sm">解析后在这里显示章节预览</div></div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="actionbar">
+        <button class="btn btn-primary btn-lg" id="btnStart">
+          <svg viewBox="0 0 24 24"><path d="M7 4l12 8-12 8z"/></svg>
+          开始生成
+        </button>
+        <button class="btn btn-danger btn-lg" id="btnStop" disabled>
+          <svg viewBox="0 0 24 24"><rect x="6" y="6" width="12" height="12" rx="2"/></svg>
+          停止
+        </button>
+        <span class="action-hint">生成过程中可随时停止，进度会保存，之后可在书库继续。</span>
+      </div>
+    </section>
+
+    <!-- 书库 -->
+    <section class="view" id="view-library">
+      <div class="view-head">
+        <h1>书库</h1>
+        <p>选择项目继续生成；已保存的音色配置会自动恢复。</p>
+      </div>
+      <div class="lib-list" id="libList"></div>
+    </section>
+
+  </main>
+</div>
+
+<!-- ═══════════ 底部：进度 + 日志 ═══════════ -->
+<footer class="dock" id="dock">
+  <div class="dock-head" id="dockToggle">
+    <div class="dock-left">
+      <span class="dot" id="jobDot" data-state="idle"></span>
+      <span class="dock-title" id="jobTitle">空闲</span>
+      <span class="dock-sub" id="jobSub"></span>
+    </div>
+    <div class="dock-right">
+      <div class="progress" title="当前章节进度">
+        <div class="progress-fill" id="progFill"></div>
+      </div>
+      <span class="dock-pct" id="progPct">0%</span>
+      <button class="icon-btn" id="btnDock" title="展开/收起日志">
+        <svg viewBox="0 0 24 24" class="i-chev"><path d="M6 15l6-6 6 6"/></svg>
+      </button>
+    </div>
+  </div>
+  <pre class="log" id="log"></pre>
+</footer>
+
+<script src="/static/app.js"></script>
+</body>
+</html>

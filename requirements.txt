@@ -1,0 +1,45 @@
+# 有声书生成工具 —— Python 依赖
+# 目标环境：Windows + NVIDIA GPU（约 6GB 显存起）+ Python 3.12
+#
+# 安装请直接跑 setup.ps1（它会处理 CUDA 版 torch 的 index-url）。
+# 下面这份清单用于手工安装或排查。
+
+# ---- 深度学习运行时（必须装 CUDA 版；CPU 版会极慢）----
+# 手工安装命令：
+#   pip install torch==2.13.0 torchaudio==2.11.0 --index-url https://download.pytorch.org/whl/cu126
+torch==2.13.0
+torchaudio==2.11.0
+
+# ---- TTS 推理 ----
+# transformers 必须锁 4.57.3：qwen_tts 0.1.1 明确依赖它。
+# 注意：不要升到 5.x（5.x 是给 LongCat-AudioDiT 那类新模型用的，本项目已否决那些引擎）
+transformers==4.57.3
+accelerate==1.12.0
+einops==0.8.2
+safetensors==0.8.0
+tokenizers==0.22.2
+
+# ---- 音频处理 ----
+librosa==1.0.0
+soundfile==0.14.0
+numpy==2.5.2
+scipy==1.18.1
+sox
+
+# ---- 质检门（说话人验证）----
+onnxruntime==1.29.0
+
+# ---- 界面（自写前端 + FastAPI 后端）----
+fastapi==0.141.1
+uvicorn==0.52.4
+python-multipart==0.0.32
+# 注：已弃用 Gradio；旧版界面归档为 audiobook_tool/_legacy_gradio.py
+
+# ---- 模型下载 ----
+modelscope==1.39.1
+huggingface_hub==0.36.2
+
+# ---- qwen_tts 本体 ----
+# 不使用 PyPI 版本，改为安装本包自带的源码以保证与开发机行为一致：
+#   pip install -e vendor/Qwen3-TTS
+# （对应的发行版本是 qwen-tts==0.1.1）

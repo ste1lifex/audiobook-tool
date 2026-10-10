@@ -1,0 +1,87 @@
+# ============================================================
+#  .gitignore —— 仓库根 = audiobook_tool/
+#  原则：代码/文档/脚本/评测入库；模型、二进制、素材、产物不入库
+# ============================================================
+
+# ── 模型权重（约 2.4GB，setup.ps1 会自动下载）─────────────
+models/
+
+# ── 二进制工具（ffmpeg/ffprobe，约 176MB）────────────────
+bin/
+
+# ── 参考音频（用户自备，通常有版权，不入库）───────────────
+#    缺失时程序会用 AUDIOBOOK_REF_AUDIO 环境变量
+#    reference_audio/ref_text.txt = 与参考音频一致的对应文本
+#    （也可用 AUDIOBOOK_REF_TEXT 环境变量指定）
+reference_audio/
+
+# ── 输入电子书（有版权）──────────────────────────────────
+input/*.epub
+input/*.mobi
+input/*.azw
+input/*.azw3
+input/*.txt
+input/*.cbz
+input/*.rar
+input/*.pdf
+
+# ── 生成产物（几十 GB）───────────────────────────────────
+output/
+work/
+
+# ── Python ───────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+.venv/
+*.egg-info/
+
+# ── 运行时 ───────────────────────────────────────────────
+ui.pid
+uilog*.txt
+
+# ── 评测产物与中间件（报告 .md 保留，音频/模型/日志不入库）──
+tts_eval/audio/
+tts_eval/models/
+tts_eval/repos/
+tts_eval/tmp/
+tts_eval/logs/
+
+# ── 版权与隐私：评测原始数据不入库 ────────────────────────
+#    下面这些文件含**受版权保护的书稿原文 / 逐段转写**，
+#    或含**本机书库清单、个人绝对路径**，只留在本地。
+#    保留入库的只有聚合指标报告（*.md / consistency*.json）。
+#    逐段原文 + ASR 对照
+tts_eval/reports/cer_*.json
+#    逐段书稿原文
+tts_eval/reports/ref_texts_*.json
+#    合成音频的 ASR 全文
+tts_eval/reports/transcript_*.json
+#    含原文/转写样本
+tts_eval/reports/score_*.json
+tts_eval/reports/chapter__chunks_*.json
+#    本机书库逐文件清单
+tts_eval/reports/library_challenge.json
+#    单本书的原始审计输出与日志
+tts_eval/reports/evidence/
+#    评测用书稿分段原文
+tts_eval/scripts/segments.json
+
+# ── 打包产物 ─────────────────────────────────────────────
+*.zip
+*.m4b
+
+# ── 本地交接与私有笔记（只在本机用，绝不入库）─────────────
+#    AGENTS.local.md = "当前到哪了 / 下一步干什么" 的会话交接，
+#    含本机路径与未决事项，不适合公开。DSH 会自动把它当叠加层加载
+#    （localInstructionFileCandidates = AGENTS.local.md / CLAUDE.local.md）。
+AGENTS.local.md
+CLAUDE.local.md
+*.local.md
+HANDOFF*.md
+NOTES*.md
+
+# ── 编辑器 / 系统 ────────────────────────────────────────
+.vscode/
+.idea/
+Thumbs.db
+desktop.ini
