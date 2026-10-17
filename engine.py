@@ -43,25 +43,62 @@ def get_model():
             device_map='cuda:0' if use_cuda else 'cpu',
             dtype=torch.bfloat16 if use_cuda else torch.float32,
         )
-        # 一次性构建克隆 prompt（复用）
-        _prompt = _model.create_voice_clone_prompt(
-            ref_audio=config.DEFAULT_REF_AUDIO,
-            ref_text=config.DEFAULT_REF_TEXT,
-            x_vector_only_mode=False,
-        )
+        # 一次性构建克隆 prompt（复用）。但默认音色只有「文件存在且文本非空」时才建：
+        # 发行包不带参考音频，缺省时这里必须放行，让用户上传的那段在 set_reference 里生效，
+        # 否则全新用户第一次点开始生成会直接崩在 soundfile 打不开默认文件上。
+        if os.path.isfile(config.DEFAULT_REF_AUDIO) and (config.DEFAULT_REF_TEXT or '').strip():
+            _prompt = _model.create_voice_clone_prompt(
+                ref_audio=config.DEFAULT_REF_AUDIO,
+                ref_text=config.DEFAULT_REF_TEXT,
+                x_vector_only_mode=False,
+            )
+        else:
+            _prompt = None
         print('>> 模型就绪', flush=True)
         return _model, _prompt
 
 
+# 全新用户（发行包按版权要求不带任何参考音频/文本）第一次生成时，缺什么必须
+# 用中文说清楚「下一步点哪里」，而不是让底层库抛 soundfile / 英文 ValueError。
+REF_AUDIO_MISSING_MSG = (
+    '还没有可用的参考音色：请先在「音色设置」里上传一段参考音频'
+    '（5~10 秒、单人、干净、已剪掉静音），或把音频放到 reference_audio\\ref_tight.wav。'
+)
+REF_TEXT_MISSING_MSG = (
+    '「参考音色对应文本」为空：请填写与参考音频逐字一致的文字'
+    '（在「音色设置」文本框里填，或写进 reference_audio\\ref_text.txt）。'
+)
+
+
+def resolve_reference(ref_audio=None, ref_text=None):
+    """解析并校验本次实际使用的参考音频/文本，返回 (绝对路径, 文本)。
+
+    顺序：本次传入 → 默认位置（reference_audio/ref_tight.wav）。
+    缺音频或文本时抛 RuntimeError，消息是可直接照做的中文操作提示。
+    """
+    audio = ref_audio.strip() if isinstance(ref_audio, str) else ref_audio
+    if not audio or not os.path.isfile(audio):
+        audio = config.DEFAULT_REF_AUDIO
+    if not os.path.isfile(audio):
+        raise RuntimeError(REF_AUDIO_MISSING_MSG)
+    text = (ref_text or config.DEFAULT_REF_TEXT or '').strip()
+    if not text:
+        raise RuntimeError(REF_TEXT_MISSING_MSG)
+    return os.path.abspath(audio), text
+
+
 def set_reference(ref_audio, ref_text):
-    """更换克隆参考音频（调用前需重载模型 prompt）。"""
+    """更换克隆参考音频（调用前需重载模型 prompt）。返回新的 prompt。"""
     global _model, _prompt
     with _load_lock:
         if _model is None:
-            return
+            return _prompt
+        if not (ref_text or '').strip():
+            raise RuntimeError(REF_TEXT_MISSING_MSG)
         _prompt = _model.create_voice_clone_prompt(
             ref_audio=ref_audio, ref_text=ref_text, x_vector_only_mode=False)
         print('>> 参考音频已更新', flush=True)
+        return _prompt
 
 
 # 切分用的标点分级（SEG_VERSION 变更时必须同步 +1）
@@ -470,18 +507,15 @@ def synthesize_book(book_dir, chapters, ref_audio=None, ref_text=None,
         if collection:
             st['collection'] = collection
     st['book'] = book_name
-    # 保存生成配置（供书库继续时恢复：参考音色/文本/分段参数）
+    # 参考音色：本次传入 → 本书保存的配置（书库"继续"）→ 默认位置。
+    # 必须在写状态之前解析好——chunk 缓存能否复用取决于它；也必须在加载模型前
+    # 就给出「缺音频/缺文本」的可操作提示，别让用户等半分钟再看到英文异常。
     st.setdefault('config', {})
-    if ref_audio:
-        st['config']['ref_audio'] = ref_audio
-        st['config']['ref_text'] = ref_text or config.DEFAULT_REF_TEXT
-    # 恢复参考音色：优先用本次传入，否则用保存的配置（书库"继续"场景）。
-    # 必须在写状态之前定好——因为 chunk 缓存能否复用取决于它。
     cfg = st.get('config', {})
-    if not ref_audio and cfg.get('ref_audio'):
-        ref_audio = cfg['ref_audio']
-        ref_text = cfg.get('ref_text') or ref_text
-    eff_ref = ref_audio or config.DEFAULT_REF_AUDIO
+    eff_ref, eff_text = resolve_reference(ref_audio or cfg.get('ref_audio'),
+                                          ref_text or cfg.get('ref_text'))
+    st['config']['ref_audio'] = eff_ref
+    st['config']['ref_text'] = eff_text
 
     # ---- chunk 缓存指纹：参数变了就绝不复用旧段（防止段号错位）----
     cur_key = chunk_cache_key(eff_ref)
@@ -503,8 +537,9 @@ def synthesize_book(book_dir, chapters, ref_audio=None, ref_text=None,
           f'{"（复用旧段）" if reuse_chunks else "（不复用旧段）"}', flush=True)
 
     model, prompt = get_model()
-    if ref_audio:
-        set_reference(ref_audio, ref_text or config.DEFAULT_REF_TEXT)
+    # 无论默认音色有没有预构建成功，都用本次实际生效的参考音色重建 prompt，
+    # 保证 prompt 与 eff_ref 一致（全新用户走的就是自己上传的那段）。
+    prompt = set_reference(eff_ref, eff_text)
     # 质检门以实际使用的参考音色为锚点
     gate = get_gate(eff_ref)
 

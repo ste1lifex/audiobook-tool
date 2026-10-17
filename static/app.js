@@ -9,6 +9,7 @@ const $$ = (s, r = document) => [...r.querySelectorAll(s)];
 const state = {
   files: [], books: [], parsed: null, sel: new Set(),
   refAudio: null, seq: 0, running: false, view: 'generate', timer: null,
+  defaultRefAudioExists: false, config: null,
 };
 
 // ─────────────────────────── 工具 ───────────────────────────
@@ -220,6 +221,7 @@ $('#refUp').onchange = async e => {
     state.refAudio = r.path;
     $('#refPlayer').src = `/api/ref-audio?path=${encodeURIComponent(r.path)}`;
     $('#refHint').textContent = `已使用：${r.name}`;
+    if (state.config) { state.config.ref_audio = r.name; renderChips(state.config); }
     toast('参考音色已替换');
   } catch (err) { toast(err.message, 'error'); }
   e.target.value = '';
@@ -227,13 +229,19 @@ $('#refUp').onchange = async e => {
 
 // ─────────────────────────── 开始 / 停止 ───────────────────────────
 $('#btnStart').onclick = async () => {
-  if (!state.parsed) return toast('请先解析预览', 'error');
+  if (!state.parsed) return toast('请先选择电子书，等右侧出现章节列表', 'error');
+  // 全新用户最容易漏的两步：先给可操作的提示，别等后台任务抛英文异常
+  const refText = $('#refText').value.trim();
+  if (!state.refAudio && !state.defaultRefAudioExists)
+    return toast('请先在「音色设置」里上传一段参考音频（5~10 秒、单人、干净）', 'error');
+  if (!refText)
+    return toast('请填写「参考音色对应文本」：与参考音频逐字一致的文字', 'error');
   const body = {
     file: $('#fileSel').value,
     book_name: $('#bookName').value,
     volumes: [...state.sel],
     ref_audio: state.refAudio,
-    ref_text: $('#refText').value,
+    ref_text: refText,
   };
   try {
     await api('/api/generate', {
@@ -325,12 +333,16 @@ async function refreshBooks() {
     const b = await api('/api/bootstrap');
     state.files = b.files;
     state.books = b.books;
+    state.config = b.config;
     renderChips(b.config);
     renderFileSelect();
     renderSideBooks();
     renderLibrary();
     $('#refText').value = b.default_ref_text || '';
-    $('#refHint').textContent = `默认：${b.default_ref_audio}`;
+    state.defaultRefAudioExists = !!b.default_ref_audio_exists;
+    $('#refHint').textContent = state.defaultRefAudioExists
+      ? `默认：${b.default_ref_audio}`
+      : '尚未内置参考音频：请上传一段你自己的音频（5~10 秒、单人、干净）';
     $('#pathHint').textContent = b.output_dir;
     if (b.job && b.job.state !== 'idle') { startPolling(false); }
     else { state.timer = setInterval(poll, 2500); }

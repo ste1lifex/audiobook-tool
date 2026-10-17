@@ -67,6 +67,7 @@ tts_eval/reports/evidence/
 tts_eval/scripts/segments.json
 
 # ── 打包产物 ─────────────────────────────────────────────
+dist/
 *.zip
 *.m4b
 

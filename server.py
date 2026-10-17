@@ -13,6 +13,7 @@ r"""
 from __future__ import annotations
 
 import argparse
+import mimetypes
 import os
 import shutil
 import sys
@@ -263,6 +264,8 @@ def bootstrap():
         'books': book_rows(),
         'default_ref_text': config.DEFAULT_REF_TEXT,
         'default_ref_audio': os.path.basename(config.DEFAULT_REF_AUDIO),
+        # 全新发行包不带默认参考音频：前端据此决定「先上传音频」还是「先填文本」的提示
+        'default_ref_audio_exists': os.path.isfile(config.DEFAULT_REF_AUDIO),
         'job': JOB.snapshot(0),
         'config': {
             'max_chars': config.MAX_CHARS_PER_SEG,
@@ -272,7 +275,10 @@ def bootstrap():
             'repetition_penalty': config.REPETITION_PENALTY,
             'max_new_tokens': config.MAX_NEW_TOKENS,
             'seg_silence': config.SEG_SILENCE_SEC,
-            'ref_audio': os.path.basename(config.DEFAULT_REF_AUDIO),
+            # 顶栏只显示「当前实际可用的音色」：包内没有默认参考音频时不能写文件名，
+            # 否则新用户会以为自己已经有一个叫 ref_tight.wav 的默认音色。
+            'ref_audio': (os.path.basename(config.DEFAULT_REF_AUDIO)
+                          if os.path.isfile(config.DEFAULT_REF_AUDIO) else '未设置'),
         },
     }
 
@@ -335,7 +341,15 @@ async def api_generate(payload: dict):
     ref_audio = payload.get('ref_audio') or None
     if ref_audio and not os.path.exists(ref_audio):
         ref_audio = None
-    ref_text = payload.get('ref_text') or config.DEFAULT_REF_TEXT
+    ref_text = (payload.get('ref_text') or config.DEFAULT_REF_TEXT or '').strip()
+
+    # 开始前先做「可操作」的前置校验：全新发行包按版权要求不带参考音频/文本，
+    # 若直接丢进后台任务，用户只会看到 soundfile 或英文 ValueError。
+    try:
+        engine.resolve_reference(ref_audio, ref_text)
+    except RuntimeError as e:
+        raise HTTPException(400, str(e))          # 前端 toast 直接显示这句话
+
     JOB.start(_bg_new_book, (path, payload.get('book_name') or '',
                              ref_audio, ref_text, '|'.join(vols)))
     return {'ok': True}
@@ -384,11 +398,39 @@ def api_open_output(payload: dict | None = None):
 
 
 @app.get('/api/ref-audio')
-def api_ref_audio():
-    p = config.DEFAULT_REF_AUDIO
-    if not os.path.exists(p):
-        raise HTTPException(404, '默认参考音频不存在')
-    return FileResponse(p, media_type='audio/wav')
+def api_ref_audio(path: str = ''):
+    """试听参考音频。
+
+    前端上传参考音频后会用 `?path=<upload-ref 返回的绝对路径>` 来试听。这里必须：
+      ① **只允许 reference_audio 目录内的文件**（防任意文件读取，绝不能省）；
+      ② 请求的文件存在 → 原文返回它（用户刚上传的那一段）；
+      ③ 否则回退到 config.DEFAULT_REF_AUDIO；再没有就 404。
+
+    修复前的实现忽略 path、永远返回默认音频：发行包里没有默认音频时播放条永远 0:00，
+    有默认音频时则"不报错但播错内容"（播的是默认那段，不是用户刚传的）。
+    """
+    ref_root = os.path.dirname(os.path.abspath(config.DEFAULT_REF_AUDIO))
+
+    def _inside_reference_dir(p):
+        """p 的真实路径是否落在 reference_audio 目录内（不解析符号链接逃逸）。"""
+        try:
+            real = os.path.normcase(os.path.realpath(p))
+            root = os.path.normcase(os.path.realpath(ref_root))
+            return os.path.commonpath([real, root]) == root
+        except (ValueError, OSError):        # 跨盘等无公共前缀
+            return False
+
+    if path:
+        cand = os.path.realpath(path)
+        if _inside_reference_dir(cand) and os.path.isfile(cand):
+            mime = mimetypes.guess_type(cand)[0] or 'audio/wav'
+            return FileResponse(cand, media_type=mime)
+
+    default = os.path.abspath(config.DEFAULT_REF_AUDIO)
+    if os.path.isfile(default):
+        mime = mimetypes.guess_type(default)[0] or 'audio/wav'
+        return FileResponse(default, media_type=mime)
+    raise HTTPException(404, '参考音频不存在（可先在界面上传一段）')
 
 
 app.mount('/static', StaticFiles(directory=STATIC_DIR), name='static')

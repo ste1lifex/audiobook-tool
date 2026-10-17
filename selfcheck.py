@@ -38,8 +38,9 @@ except Exception as e:                                   # noqa: BLE001
     bad += 1
     print(f'  MISS torch: {e}')
 
-for m in ('torchaudio', 'transformers', 'gradio', 'librosa', 'soundfile',
+for m in ('torchaudio', 'transformers', 'librosa', 'soundfile',
           'onnxruntime', 'qwen_tts', 'modelscope'):
+    # 注：gradio 已弃用（旧界面归档为 _legacy_gradio.py），2026-10-14 由打包 Bot 移出本清单
     try:
         mod = __import__(m)
         ver = getattr(mod, '__version__', '')
