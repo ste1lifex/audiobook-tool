@@ -5,6 +5,8 @@
 > 核心不是"调用了哪个 TTS"，而是**让上千个段落听起来始终是同一个人**——
 > 逐段质检、不合格自动重生成、段级断点续跑。
 
+> 🎬 **视频演示**：[B 站 · 有声书生成工具](https://www.bilibili.com/video/BV15uJB6JEUc)
+
 ![亮色界面](docs/screenshots/light.png)
 
 <details>
