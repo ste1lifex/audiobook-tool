@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>有声书生成工具</title>
-<link rel="stylesheet" href="/static/app.css">
+<link rel="stylesheet" href="/static/app.css?v=20261031">
 </head>
 <body>
 
@@ -42,6 +42,10 @@
         <svg viewBox="0 0 24 24"><path d="M4 5h4v14H4zM10 5h4v14h-4zM16 7l4-1 2 12-4 1z"/></svg>
         <span>书库</span>
         <span class="nav-badge" id="bookCount">0</span>
+      </button>
+      <button class="nav-item" data-view="settings">
+        <svg viewBox="0 0 24 24"><path d="M4 7h8M16 7h4M4 17h4M12 17h8"/><circle cx="14" cy="7" r="2"/><circle cx="8" cy="17" r="2"/></svg>
+        <span>设置</span>
       </button>
     </nav>
 
@@ -151,6 +155,73 @@
       <div class="lib-list" id="libList"></div>
     </section>
 
+    <!-- 设置 -->
+    <section class="view" id="view-settings">
+      <div class="view-head">
+        <h1>设置</h1>
+        <p>调整后续生成的参数。生成中参数会锁定，停止后才能修改。</p>
+      </div>
+
+      <div class="settings-note" id="settingsNote">
+        <strong>注意：</strong>修改「分段字数 / temp / top_p / rep」会改变段缓存指纹。
+        对已有书点「继续生成」时，已完成的章节会保留，未完成的章节会按新参数重新生成——
+        可能出现前后章节参数不一致，换参数后建议直接开新书。
+      </div>
+
+      <div class="settings-grid">
+        <div class="card">
+          <div class="card-head"><h2>生成参数</h2></div>
+          <div class="card-body" id="settingsParams"></div>
+        </div>
+
+        <div class="card">
+          <div class="card-head"><h2>切分算法与段缓存</h2></div>
+          <div class="card-body">
+            <div class="field">
+              <label for="setSegVersion">切分算法</label>
+              <input id="setSegVersion" type="text" disabled>
+              <div class="hint" id="helpSegVersion"></div>
+            </div>
+            <div class="field">
+              <label for="setMaxNew">最大 token 数（固定）</label>
+              <input id="setMaxNew" type="text" disabled>
+              <div class="hint">2048 是当前基准；调低会在长段上撞顶截断，产生噪声尾。</div>
+            </div>
+            <div class="hint" id="settingsPath"></div>
+          </div>
+        </div>
+
+        <div class="card span-2">
+          <div class="card-head"><h2>批处理与显存</h2></div>
+          <div class="card-body">
+            <div class="field">
+              <label for="setBatch">批处理大小（段/批）</label>
+              <div class="row">
+                <input id="setBatch" type="number" min="1" max="16" step="1" class="input-num">
+                <button class="btn btn-ghost" id="btnSuggestBatch" type="button">按显存推荐</button>
+                <span class="hint" id="gpuHint" style="margin:0"></span>
+              </div>
+              <div class="hint" id="helpBatch"></div>
+            </div>
+            <table class="settings-table">
+              <thead><tr><th>显存</th><th>建议 batch</th><th>说明</th></tr></thead>
+              <tbody>
+                <tr><td>6–10 GB</td><td>4</td><td>默认安全值</td></tr>
+                <tr><td>12–18 GB</td><td>8</td><td>更快，显存仍有富余</td></tr>
+                <tr><td>20 GB+（Windows/WDDM）</td><td>8</td><td>16 会溢出到共享内存，反而更慢</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+
+      <div class="settings-actions">
+        <button class="btn btn-primary btn-lg" id="btnSaveSettings" type="button">保存设置</button>
+        <button class="btn btn-ghost btn-lg" id="btnResetSettings" type="button">恢复默认</button>
+        <span class="action-hint" id="settingsStatus"></span>
+      </div>
+    </section>
+
   </main>
 </div>
 
@@ -175,6 +246,6 @@
   <pre class="log" id="log"></pre>
 </footer>
 
-<script src="/static/app.js"></script>
+<script src="/static/app.js?v=20261031"></script>
 </body>
 </html>

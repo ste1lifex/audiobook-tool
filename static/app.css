@@ -1,4 +1,4 @@
-﻿/* ==========================================================================
+/* ==========================================================================
    有声书生成工具 —— 样式
    设计 token 参照 DeepSeek Harness（见 docs/DESIGN.md）。
    三条关键特征：① 中性色偏蓝 ② 层次靠 0 0 0 .5px 发丝描边而非重阴影 ③ 面板大圆角
@@ -267,18 +267,19 @@ button, input, select, textarea { font: inherit; color: inherit; }
 .field { margin-bottom: 14px; }
 .field:last-child { margin-bottom: 0; }
 .field label { display: block; font-size: 12px; color: var(--text-2); margin-bottom: 6px; }
-input[type=text], select, textarea {
+input[type=text], input[type=number], select, textarea {
   width: 100%; padding: 8px 10px;
   background: var(--bg);
   border: .5px solid var(--border-3);
   border-radius: var(--r-sm);
   transition: border-color .12s, box-shadow .12s;
 }
-input[type=text]:hover, select:hover, textarea:hover { border-color: var(--border-4); }
-input[type=text]:focus, select:focus, textarea:focus {
+input[type=text]:hover, input[type=number]:hover, select:hover, textarea:hover { border-color: var(--border-4); }
+input[type=text]:focus, input[type=number]:focus, select:focus, textarea:focus {
   outline: none; border-color: var(--brand);
   box-shadow: 0 0 0 3px var(--brand-soft);
 }
+input:disabled { opacity: .62; cursor: not-allowed; }
 textarea { resize: vertical; font-family: var(--font-sans); line-height: 1.5; }
 select {
   appearance: none;
@@ -431,9 +432,32 @@ select {
 .toast.is-on { opacity: 1; transform: translateX(-50%) translateY(-4px); }
 .toast[data-kind=error] { background: var(--danger); }
 
+/* ---------- 设置页 ---------- */
+.settings-note {
+  margin: 0 0 14px; padding: 10px 12px;
+  font-size: 12px; line-height: 1.55; color: var(--text-2);
+  background: var(--warn-soft);
+  border: .5px solid var(--warn);
+  border-radius: var(--r-md);
+}
+.settings-note strong { color: var(--warn); }
+.settings-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+.settings-grid .card.span-2 { grid-column: 1 / -1; }
+.settings-actions { display: flex; gap: 10px; align-items: center; margin-top: 16px; flex-wrap: wrap; }
+.input-num { width: 110px; flex: none; }
+.settings-table { width: 100%; border-collapse: collapse; margin-top: 12px; font-size: 12px; }
+.settings-table th, .settings-table td {
+  text-align: left; padding: 7px 8px;
+  border-bottom: .5px solid var(--border-2);
+  color: var(--text-2);
+}
+.settings-table th { color: var(--text-3); font-weight: 500; }
+#settingsStatus { color: var(--text-4); }
+
 @media (max-width: 900px) {
   .shell { grid-template-columns: 1fr; }
   .sidebar { display: none; }
-  .grid, .card-body.two-col { grid-template-columns: 1fr; }
+  .grid, .card-body.two-col, .settings-grid { grid-template-columns: 1fr; }
+  .settings-grid .card.span-2 { grid-column: auto; }
   .progress { width: 100px; }
 }

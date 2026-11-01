@@ -9,7 +9,7 @@ const $$ = (s, r = document) => [...r.querySelectorAll(s)];
 const state = {
   files: [], books: [], parsed: null, sel: new Set(),
   refAudio: null, seq: 0, running: false, view: 'generate', timer: null,
-  defaultRefAudioExists: false, config: null,
+  defaultRefAudioExists: false, config: null, settings: null,
 };
 
 // ─────────────────────────── 工具 ───────────────────────────
@@ -62,6 +62,7 @@ function setView(v) {
   state.view = v;
   $$('.nav-item').forEach(b => b.classList.toggle('is-active', b.dataset.view === v));
   $$('.view').forEach(s => s.classList.toggle('is-active', s.id === `view-${v}`));
+  if (v === 'settings') loadSettings();
 }
 $$('.nav-item').forEach(b => b.onclick = () => setView(b.dataset.view));
 
@@ -132,7 +133,7 @@ function renderChips(cfg) {
   $('#cfgChips').innerHTML = [
     `分段 ≤${cfg.max_chars}字`, `切分 v${cfg.seg_version}`,
     `temp ${cfg.temperature}`, `top_p ${cfg.top_p}`, `rep ${cfg.repetition_penalty}`,
-    `静音 ${cfg.seg_silence}s`, `参考 ${cfg.ref_audio}`,
+    `静音 ${cfg.seg_silence}s`, `批处理 ${cfg.batch_size ?? '-'}`, `参考 ${cfg.ref_audio}`,
   ].map(t => `<span class="chip">${esc(t)}</span>`).join('');
 }
 
@@ -309,6 +310,7 @@ async function poll() {
 
   $('#btnStop').disabled = !s.running;
   $('#btnStart').disabled = s.running;
+  if (state.settings) syncSettingsLock(s.running);
 
   // 任务结束时刷新书库
   if (!s.running && state.runningPrev) {
@@ -325,6 +327,90 @@ async function refreshBooks() {
     renderLibrary();
   } catch { }
 }
+
+// ─────────────────────────── 设置页 ───────────────────────────
+const SETTINGS_FIELDS = [
+  { key: 'max_chars', label: '分段字数上限', unit: '字', step: 1 },
+  { key: 'temperature', label: '采样温度 temp', step: 0.05 },
+  { key: 'top_p', label: '核采样 top_p', step: 0.05 },
+  { key: 'repetition_penalty', label: '重复惩罚 rep', step: 0.05 },
+  { key: 'seg_silence', label: '段间静音', unit: '秒', step: 0.05 },
+];
+
+async function loadSettings() {
+  try {
+    const s = await api('/api/settings');
+    state.settings = s;
+    renderSettings(s);
+  } catch (e) { toast('读取设置失败：' + e.message, 'error'); }
+}
+
+function renderSettings(s) {
+  $('#settingsParams').innerHTML = SETTINGS_FIELDS.map(f => {
+    const r = (s.ranges && s.ranges[f.key]) || [0, 0];
+    const unit = f.unit ? `（${f.unit}）` : '';
+    return `<div class="field">
+      <label for="set-${f.key}">${f.label}${unit}</label>
+      <input id="set-${f.key}" type="number" min="${r[0]}" max="${r[1]}" step="${f.step}"
+             value="${s.values[f.key]}">
+      <div class="hint">${esc((s.help && s.help[f.key]) || '')}</div>
+    </div>`;
+  }).join('');
+  const rb = (s.ranges && s.ranges.batch_size) || [1, 16];
+  $('#setBatch').min = rb[0];
+  $('#setBatch').max = rb[1];
+  $('#setBatch').value = s.values.batch_size;
+  $('#gpuHint').textContent = (s.gpu && s.gpu.note) || '';
+  $('#helpBatch').textContent = (s.help && s.help.batch_size) || '';
+  $('#helpSegVersion').textContent = (s.help && s.help.seg_version) || '';
+  $('#setSegVersion').value = 'v' + s.readonly.seg_version;
+  $('#setMaxNew').value = String(s.readonly.max_new_tokens);
+  $('#settingsPath').textContent = '设置保存在：' + (s.path || '');
+  syncSettingsLock(!!s.running);
+}
+
+function syncSettingsLock(running) {
+  $$('#settingsParams input, #setBatch, #btnSaveSettings, #btnResetSettings, #btnSuggestBatch')
+    .forEach(el => { el.disabled = !!running; });
+  $('#settingsStatus').textContent = running ? '生成中，参数已锁定；停止后可修改' : '';
+}
+
+$('#btnSaveSettings').onclick = async () => {
+  const body = {};
+  SETTINGS_FIELDS.forEach(f => { body[f.key] = Number($('#set-' + f.key).value); });
+  body.batch_size = Number($('#setBatch').value);
+  try {
+    const r = await api('/api/settings', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    state.config = r.config;
+    state.settings = r.settings;
+    renderChips(r.config);
+    renderSettings(r.settings);
+    toast('设置已保存');
+  } catch (e) { toast(e.message, 'error'); }
+};
+
+$('#btnResetSettings').onclick = () => {
+  const d = (state.settings && state.settings.defaults) || {};
+  SETTINGS_FIELDS.forEach(f => {
+    const el = $('#set-' + f.key);
+    if (el && d[f.key] !== undefined) el.value = d[f.key];
+  });
+  if (d.batch_size !== undefined) $('#setBatch').value = d.batch_size;
+  $('#settingsStatus').textContent = '已填入默认值，点「保存设置」生效';
+};
+
+$('#btnSuggestBatch').onclick = () => {
+  const g = state.settings && state.settings.gpu;
+  if (g && g.suggested_batch) {
+    $('#setBatch').value = g.suggested_batch;
+    $('#settingsStatus').textContent = `已按显存填为 ${g.suggested_batch}，点「保存设置」生效`;
+  } else {
+    toast('未读取到显存信息', 'error');
+  }
+};
 
 // ─────────────────────────── 启动 ───────────────────────────
 (async function init() {

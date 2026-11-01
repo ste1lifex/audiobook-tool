@@ -13,6 +13,7 @@ r"""
 from __future__ import annotations
 
 import argparse
+import json
 import mimetypes
 import os
 import shutil
@@ -104,6 +105,171 @@ class Job:
 
 
 JOB = Job()
+
+
+# ══════════════════════════════════════════════════════════════════
+#  可持久化的生成参数（WebUI「设置」页）
+#  · 只允许在空闲时修改，避免任务跑到一半换参数导致段缓存错位
+#  · max_chars / temperature / top_p / repetition_penalty 会影响
+#    engine.chunk_cache_key()；改完再续跑旧书会拒绝复用旧段
+# ══════════════════════════════════════════════════════════════════
+SETTINGS_PATH = os.path.join(config.WORK_ROOT, 'ui_settings.json')
+
+_SETTING_TO_CONFIG = {
+    'max_chars': 'MAX_CHARS_PER_SEG',
+    'temperature': 'TEMPERATURE',
+    'top_p': 'TOP_P',
+    'repetition_penalty': 'REPETITION_PENALTY',
+    'seg_silence': 'SEG_SILENCE_SEC',
+    'batch_size': 'BATCH_SIZE',
+}
+
+SETTINGS_RANGES = {
+    'max_chars': (50, 200, int),
+    'temperature': (0.1, 1.5, float),
+    'top_p': (0.1, 1.0, float),
+    'repetition_penalty': (1.0, 1.5, float),
+    'seg_silence': (0.0, 1.5, float),
+    'batch_size': (1, 16, int),
+}
+
+SETTINGS_HELP = {
+    'max_chars': '每段最多多少字。越小越稳、越不容易音色漂移，但段数更多、总时长略长。'
+                 '105 是听感基准，推荐 90–120。改动会让旧段缓存指纹失效。',
+    'seg_version': '切分算法版本，由程序决定并参与段缓存指纹。v2 会先把长句拆成不超过上限的'
+                   '原子片段再合并，修复了 v1 超长段被截断的问题。不可手动修改。',
+    'temperature': '采样温度。越高越有变化、也越容易跑偏；0.5 是克隆稳定性的基准。'
+                   '推荐 0.3–0.7。',
+    'top_p': '核采样阈值。0.9 是基准；越低越保守、越稳定。推荐 0.8–0.95。',
+    'repetition_penalty': '重复惩罚。1.15 抑制复读；太高会让语调变僵硬。'
+                          '推荐 1.05–1.25。',
+    'seg_silence': '段与段之间的静音（秒）。0.45 是基准；越小越紧凑，越大越从容。'
+                   '它不参与段缓存指纹，但已经生成的书不会自动重拼。',
+    'batch_size': '一次并行生成多少段。越大越快、越吃显存，不影响音质。'
+                  '6–10GB 建议 4；12–18GB 建议 8；20GB 在 Windows/WDDM 下 16 实测会'
+                  '溢出到共享内存反而变慢，建议 8。',
+}
+
+
+def _boot_defaults():
+    """进程启动时的参数（环境变量/默认值），用作「恢复默认」。"""
+    return {
+        'max_chars': int(config.MAX_CHARS_PER_SEG),
+        'temperature': float(config.TEMPERATURE),
+        'top_p': float(config.TOP_P),
+        'repetition_penalty': float(config.REPETITION_PENALTY),
+        'seg_silence': float(config.SEG_SILENCE_SEC),
+        'batch_size': int(config.BATCH_SIZE),
+    }
+
+
+BOOT_DEFAULTS = _boot_defaults()
+
+
+def _current_settings():
+    return {k: getattr(config, attr) for k, attr in _SETTING_TO_CONFIG.items()}
+
+
+def _coerce_settings(payload):
+    """校验并转换前端提交的参数；越界/非法直接 400。"""
+    out = {}
+    for key, (lo, hi, typ) in SETTINGS_RANGES.items():
+        if key not in payload:
+            continue
+        raw = payload[key]
+        if isinstance(raw, bool):
+            raise HTTPException(400, f'{key} 不是有效数字')
+        try:
+            f = float(raw)
+        except (TypeError, ValueError):
+            raise HTTPException(400, f'{key} 不是有效数字')
+        if typ is int:
+            if abs(f - round(f)) > 1e-9:
+                raise HTTPException(400, f'{key} 必须是整数')
+            v = int(round(f))
+        else:
+            v = f
+        if not (lo <= v <= hi):
+            raise HTTPException(400, f'{key} 需在 {lo}–{hi} 之间')
+        out[key] = v
+    return out
+
+
+def _apply_settings(values):
+    for key, value in values.items():
+        setattr(config, _SETTING_TO_CONFIG[key], value)
+
+
+def _save_settings():
+    os.makedirs(os.path.dirname(SETTINGS_PATH), exist_ok=True)
+    with open(SETTINGS_PATH, 'w', encoding='utf-8') as f:
+        json.dump(_current_settings(), f, ensure_ascii=False, indent=1)
+
+
+def _load_saved_settings():
+    if not os.path.isfile(SETTINGS_PATH):
+        return {}
+    try:
+        with open(SETTINGS_PATH, encoding='utf-8') as f:
+            return _coerce_settings(json.load(f))
+    except Exception:                                          # noqa: BLE001
+        return {}
+
+
+def _gpu_profile():
+    """检测显存，给出批处理建议。"""
+    info = {'available': False, 'name': '', 'vram_gb': None,
+            'suggested_batch': 4, 'note': '未检测到 CUDA GPU；建议批处理 2–4'}
+    try:
+        import torch
+        if torch.cuda.is_available():
+            p = torch.cuda.get_device_properties(0)
+            vram = p.total_memory / (1024 ** 3)
+            suggested = 4 if vram < 12 else 8
+            info.update(available=True, name=p.name, vram_gb=round(vram, 1),
+                        suggested_batch=suggested,
+                        note=f'检测到 {p.name} · {vram:.1f} GB 显存，建议批处理 {suggested}')
+    except Exception:                                          # noqa: BLE001
+        pass
+    return info
+
+
+def _config_payload():
+    """顶栏 chips 与设置页共用的一份当前配置。"""
+    return {
+        'max_chars': config.MAX_CHARS_PER_SEG,
+        'seg_version': getattr(config, 'SEG_VERSION', 1),
+        'temperature': config.TEMPERATURE,
+        'top_p': config.TOP_P,
+        'repetition_penalty': config.REPETITION_PENALTY,
+        'max_new_tokens': config.MAX_NEW_TOKENS,
+        'seg_silence': config.SEG_SILENCE_SEC,
+        'batch_size': config.BATCH_SIZE,
+        'ref_audio': (os.path.basename(config.DEFAULT_REF_AUDIO)
+                      if os.path.isfile(config.DEFAULT_REF_AUDIO) else '未设置'),
+    }
+
+
+def _settings_payload():
+    return {
+        'values': _current_settings(),
+        'defaults': dict(BOOT_DEFAULTS),
+        'ranges': {k: [lo, hi] for k, (lo, hi, _t) in SETTINGS_RANGES.items()},
+        'help': SETTINGS_HELP,
+        'readonly': {
+            'seg_version': getattr(config, 'SEG_VERSION', 1),
+            'max_new_tokens': config.MAX_NEW_TOKENS,
+        },
+        'gpu': _gpu_profile(),
+        'running': JOB.running(),
+        'path': SETTINGS_PATH,
+    }
+
+
+# 启动时恢复上次保存的参数（文件坏了就忽略，回到环境变量/默认值）
+_saved = _load_saved_settings()
+if _saved:
+    _apply_settings(_saved)
 
 
 # ══════════════════════════════════════════════════════════════════
@@ -267,19 +433,7 @@ def bootstrap():
         # 全新发行包不带默认参考音频：前端据此决定「先上传音频」还是「先填文本」的提示
         'default_ref_audio_exists': os.path.isfile(config.DEFAULT_REF_AUDIO),
         'job': JOB.snapshot(0),
-        'config': {
-            'max_chars': config.MAX_CHARS_PER_SEG,
-            'seg_version': getattr(config, 'SEG_VERSION', 1),
-            'temperature': config.TEMPERATURE,
-            'top_p': config.TOP_P,
-            'repetition_penalty': config.REPETITION_PENALTY,
-            'max_new_tokens': config.MAX_NEW_TOKENS,
-            'seg_silence': config.SEG_SILENCE_SEC,
-            # 顶栏只显示「当前实际可用的音色」：包内没有默认参考音频时不能写文件名，
-            # 否则新用户会以为自己已经有一个叫 ref_tight.wav 的默认音色。
-            'ref_audio': (os.path.basename(config.DEFAULT_REF_AUDIO)
-                          if os.path.isfile(config.DEFAULT_REF_AUDIO) else '未设置'),
-        },
+        'config': _config_payload(),
     }
 
 
@@ -384,6 +538,25 @@ def api_status(since: int = 0):
 @app.get('/api/books')
 def api_books():
     return {'books': book_rows()}
+
+
+@app.get('/api/settings')
+def api_get_settings():
+    return _settings_payload()
+
+
+@app.post('/api/settings')
+def api_save_settings(payload: dict):
+    # 运行中改参数会让后续 batch 用不同配置，而 chunk 指纹是任务开始时算的，
+    # 会造成同一本书里混入不同参数/旧段错位。必须空闲时改。
+    if JOB.running():
+        raise HTTPException(409, '生成中不能修改参数，请先停止任务')
+    values = _coerce_settings(payload or {})
+    if not values:
+        raise HTTPException(400, '没有可保存的参数')
+    _apply_settings(values)
+    _save_settings()
+    return {'ok': True, 'settings': _settings_payload(), 'config': _config_payload()}
 
 
 @app.post('/api/open-output')

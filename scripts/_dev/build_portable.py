@@ -77,7 +77,7 @@ import zipfile
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.dirname(os.path.dirname(HERE))                 # scripts\_dev\ -> 仓库根
 
-DEFAULT_STAGE = r'F:\commuting\_pack\portable_build'
+DEFAULT_STAGE = os.path.join(REPO, 'work', 'portable_build')
 DEFAULT_OUT = os.path.join(REPO, 'dist')
 
 # 产品代码（原样复制，不改一个字节）

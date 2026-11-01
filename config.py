@@ -96,6 +96,19 @@ def _default_ref_text():
     v = _env('AUDIOBOOK_REF_TEXT')
     if v:
         return v
+    # 环境变量直接从文件读（避免 bat/PowerShell 传中文文本的编码坑）
+    pf = _env('AUDIOBOOK_REF_TEXT_FILE')
+    if pf:
+        if not os.path.isabs(pf):
+            pf = os.path.join(PROJECT_ROOT, pf)
+        if os.path.isfile(pf):
+            try:
+                with open(pf, encoding='utf-8-sig') as f:
+                    t = f.read().strip()
+                if t:
+                    return t
+            except OSError:
+                pass
     p = _first_file(_proj('reference_audio', 'ref_text.txt'),
                     _pkg('reference_audio', 'ref_text.txt'))
     if p:
@@ -126,8 +139,11 @@ TOP_P = 0.9
 REPETITION_PENALTY = 1.15
 
 # TTS 参数
-BATCH_SIZE = 4               # 批量推理 4 段比逐段快 4.5 倍（26s/段 vs 116s/段），
-                             # 且质量无差别（实测 0.821±0.011 vs 0.830±0.012）
+BATCH_SIZE = int(_env('AUDIOBOOK_BATCH_SIZE') or 4)
+                             # 批量推理 4 段比逐段快 4.5 倍（26s/段 vs 116s/段），
+                             # 且质量无差别（实测 0.821±0.011 vs 0.830±0.012）。
+                             # 显存够大时可用 AUDIOBOOK_BATCH_SIZE=8（RTX 3080 20G 实测
+                             # 13.3GB、无溢出、约 8s/段；16 会 WDDM 溢出到共享内存反而变慢）。
 MAX_NEW_TOKENS = 2048        # 恢复库默认；原先 1600 会让长段撞顶被截断→产生噪声尾
 # 段长上限：205 → 105。依据是三路横向评测（同一批连续段落、同一参考音频、
 # 同一套采样参数）中，105 字分段 + 0.45s 段间静音的 0.6B 输出被听感判定为
@@ -145,6 +161,19 @@ SEG_VERSION = 2
 BAD_DUR = 70.0               # 段时长上限（2048 token @12Hz ≈ 170s，留足余量）
 SEG_SILENCE_SEC = 0.45       # 段间静音（评测基准值；原 0.30）
 SAMPLE_RATE = 24000
+
+# ---- 段尾完整性保护 ----
+# Qwen3-TTS 偶尔会在最后一个字/韵尾前提前 EOS：听感是“最后一个字没念完，
+# 就直接接下一段”。它不是音色问题，质检门（声纹/噪声）也抓不到。
+# 这里用两个廉价信号识别：
+#   tail_sil  —— 段尾到最后一个有声采样的静音长度（自然收尾通常 >= 0.10s）
+#   last_rms  —— 最后 0.2s 的 RMS（截断时仍有较高能量，然后骤然进入段间静音）
+# 命中后按批重生成（批内重复该段做多次采样），选“尾巴最长 + 收尾能量最低”的一版。
+# 只影响选哪一版音频，不改变文本/分段/音色，因此不进 chunk 指纹。
+TAIL_GUARD_ENABLED = True
+TAIL_MIN_SIL = 0.06          # 段尾静音短于此……
+TAIL_MAX_RMS = 0.04          # ……且最后 0.2s RMS 高于此 → 疑似截断
+TAIL_RETRY_ROUNDS = 2        # 最多重试几轮；重试走 batch，不会退化成逐段慢跑
 
 # ---- 段级质检（quality.py）----
 # 原来只用"时长<=60s"判异常，抓不到两类真实缺陷：

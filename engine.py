@@ -148,9 +148,10 @@ def _split_overlong(p, mx):
     return out
 
 
-def split_segments(text, max_chars=config.MAX_CHARS_PER_SEG):
+def split_segments(text, max_chars=None):
     """
     按标点切段并合并到 <= max_chars。
+    max_chars 默认取 config.MAX_CHARS_PER_SEG（运行时可变，供 WebUI 设置）。
 
     实现要点（SEG_VERSION=2 起）：
       先把整篇切成**每个都不超过上限的原子片段**，再贪心合并。
@@ -259,6 +260,77 @@ def _gate_check(wav, sr, gate):
         ok = dur <= getattr(config, 'BAD_DUR', 70.0)
         return ok, ('' if ok else f'超长{dur:.0f}s'), {'dur': dur}
     return gate.check(wav, sr)
+
+
+# ============ 段尾完整性（修“最后一个字没念完就接下一段”） ============
+def _tail_metrics(wav, sr):
+    """
+    段尾指标：
+      tail_sil —— 最后一个有声采样到段尾的静音时长（秒）
+      last_rms —— 最后 0.2s 的 RMS
+      score    —— 越大越像自然收尾（尾巴越长越好，收尾能量越低越好）
+    """
+    w = np.asarray(wav, dtype=np.float32)
+    if len(w) == 0:
+        return {'tail_sil': 0.0, 'last_rms': 0.0, 'score': -1.0}
+    peak = float(np.max(np.abs(w)))
+    th = max(0.004, 0.02 * peak)
+    nz = np.where(np.abs(w) > th)[0]
+    tail = (len(w) - nz[-1]) / sr if len(nz) else len(w) / sr
+    n = min(len(w), int(0.2 * sr))
+    rms = float(np.sqrt(np.mean(w[-n:].astype(np.float64) ** 2))) if n else 0.0
+    return {'tail_sil': float(tail), 'last_rms': rms,
+            'score': float(tail - 2.0 * rms)}
+
+
+def _tail_bad(tm):
+    """疑似“最后一个字没念完”：尾巴几乎没有静音，但收尾还有能量。"""
+    if not getattr(config, 'TAIL_GUARD_ENABLED', True):
+        return False
+    return (tm['tail_sil'] < getattr(config, 'TAIL_MIN_SIL', 0.06)
+            and tm['last_rms'] > getattr(config, 'TAIL_MAX_RMS', 0.04))
+
+
+def _retry_tail(model, prompt, texts, sel, pending, gate):
+    """
+    对疑似截断的段做批内多采样重生成。
+
+    GPU 逐段生成约 100s/段，而 batch=8 约 8s/段；所以这里把待重试段循环填满
+    一个 batch（只有 1 段要修时就是同一段生成 8 个不同采样），再从中选最优。
+    返回仍疑似截断的段号列表。
+    """
+    bs = max(1, int(getattr(config, 'BATCH_SIZE', 4)))
+    still = []
+    for start in range(0, len(pending), bs):
+        group = pending[start:start + bs]
+        times = max(1, (bs + len(group) - 1) // len(group))
+        slots = (group * times)[:bs]
+        rtexts = [texts[k] for k in slots]
+        try:
+            rwavs, rsr = model.generate_voice_clone(
+                text=rtexts, language=['Chinese'] * len(rtexts),
+                voice_clone_prompt=prompt,
+                max_new_tokens=config.MAX_NEW_TOKENS, **_gen_kwargs())
+        except Exception as e:                                     # noqa: BLE001
+            print(f'   段尾重试失败: {e}', flush=True)
+            _clear_cache()
+            still.extend(group)
+            continue
+        for j, k in enumerate(slots):
+            w = rwavs[j]
+            if w.dtype != np.float32:
+                w = w.astype(np.float32)
+            ok, why, m = _gate_check(w, rsr, gate)
+            tm = _tail_metrics(w, rsr)
+            cur = sel[k]
+            better = ((ok and not cur['ok'])
+                      or (ok == cur['ok'] and tm['score'] > cur['tm']['score']))
+            if better:
+                cur.update(w=w, sr=rsr, ok=ok, why=why, m=m, tm=tm)
+        for k in group:
+            if _tail_bad(sel[k]['tm']):
+                still.append(k)
+    return still
 
 
 # ============ 段级生成（带质检门） ============
@@ -545,6 +617,7 @@ def synthesize_book(book_dir, chapters, ref_audio=None, ref_text=None,
 
     total_audio = 0.0
     gate_stats = {'checked': 0, 'regen': 0, 'worst_sim': 9.0}
+    tail_stats = {'flagged': 0, 'fixed': 0, 'left': 0}
     for ci, ch in enumerate(chapters):
         if stop_event is not None and stop_event.is_set():
             st['status'] = 'paused'
@@ -594,26 +667,53 @@ def synthesize_book(book_dir, chapters, ref_audio=None, ref_text=None,
                     text=texts, language=['Chinese'] * len(texts),
                     voice_clone_prompt=prompt,
                     max_new_tokens=config.MAX_NEW_TOKENS, **_gen_kwargs())
+                sel = []
                 for off, w in enumerate(wavs):
                     i = idxs[off]
                     if w.dtype != np.float32:
                         w = w.astype(np.float32)
+                    w_sr = sr
                     # 段级质检：时长 + 音色相似度 + 段内滑窗 + 噪声谱平坦度
-                    ok, why, m = _gate_check(w, sr, gate)
+                    ok, why, m = _gate_check(w, w_sr, gate)
                     if not ok:
                         print(f'   seg{i} 质检不合格 [{why}] → 重生成', flush=True)
                         wg, srg, note = _gen_guarded_v2(model, prompt, texts[off], gate)
                         if wg is not None:
-                            w, sr = wg, srg
+                            w, w_sr = wg, srg
+                            ok, why, m = _gate_check(w, w_sr, gate)
                             print(f'   seg{i} 重生成结果: {note}', flush=True)
                         gate_stats['regen'] += 1
                     gate_stats['checked'] += 1
                     if m.get('sim') is not None and m['sim'] < gate_stats.get('worst_sim', 9):
                         gate_stats['worst_sim'] = m['sim']
+                    sel.append({'w': w, 'sr': w_sr, 'ok': ok, 'why': why,
+                                'm': m, 'tm': _tail_metrics(w, w_sr)})
+
+                # ---- 段尾保护：疑似“最后一个字没念完”的段，批内多采样重试 ----
+                if getattr(config, 'TAIL_GUARD_ENABLED', True):
+                    bad0 = [k for k, s in enumerate(sel) if _tail_bad(s['tm'])]
+                    if bad0:
+                        rounds = int(getattr(config, 'TAIL_RETRY_ROUNDS', 2))
+                        pend = list(bad0)
+                        for r in range(rounds):
+                            if not pend or (stop_event is not None and stop_event.is_set()):
+                                break
+                            print(f'   段尾保护: 第{r + 1}轮重生成 {len(pend)} 段'
+                                  f'（批内多采样）', flush=True)
+                            pend = _retry_tail(model, prompt, texts, sel, pend, gate)
+                        left = sum(1 for k in bad0 if _tail_bad(sel[k]['tm']))
+                        tail_stats['flagged'] += len(bad0)
+                        tail_stats['fixed'] += len(bad0) - left
+                        tail_stats['left'] += left
+                        print(f'   段尾保护: 命中 {len(bad0)} 段，修复 '
+                              f'{len(bad0) - left}，仍可疑 {left}', flush=True)
+
+                for off, s in enumerate(sel):
+                    i = idxs[off]
                     path = os.path.join(ch_dir, f'{prefix}_seg{i:05d}.wav')
-                    sf.write(path, w, sr)
-                    ch_wavs[i] = w
-                    total_audio += len(w) / sr
+                    sf.write(path, s['w'], s['sr'])
+                    ch_wavs[i] = s['w']
+                    total_audio += len(s['w']) / s['sr']
             except Exception as e:
                 print(f'   batch {idxs} 失败: {e}，单段重试', flush=True)
                 _clear_cache()
@@ -656,6 +756,10 @@ def synthesize_book(book_dir, chapters, ref_audio=None, ref_text=None,
             save_state(book_dir, st)
             print(f'>> 完成 {os.path.basename(mp3_path)} ({len(full)/config.SAMPLE_RATE/60:.1f} 分钟)', flush=True)
 
+    if tail_stats['flagged']:
+        print(f'>> 段尾保护累计: 命中 {tail_stats["flagged"]}，修复 {tail_stats["fixed"]}，'
+              f'仍可疑 {tail_stats["left"]}', flush=True)
+
     # 全部完成 → 合并整本
     if all(c['done'] for c in st['chapters']):
         mp3s = []
@@ -680,6 +784,7 @@ def synthesize_book(book_dir, chapters, ref_audio=None, ref_text=None,
                     f.write(f'file:///{m.replace(chr(92), "/")}\n')
             st['status'] = 'done'
             st['full_mp3'] = os.path.basename(full_mp3)
+            st['tail_stats'] = tail_stats
             save_state(book_dir, st)
             return full_mp3, st
     st['status'] = 'paused'
